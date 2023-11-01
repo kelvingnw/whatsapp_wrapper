@@ -1,0 +1,51 @@
+stages:
+  - build
+  - deploy
+
+variables:
+  DOCKER_HOST: tcp://docker:2375 
+  DOCKER_TLS_CERTDIR: ""
+  IMAGE_NAME: $CI_REGISTRY_IMAGE:latest
+
+build-image:
+  stage: build
+  image: docker:20-dind
+  services:
+    - name: docker:20-dind
+      alias: docker
+      command: ["--tls=false"]
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - docker build -t $IMAGE_NAME .
+    - docker push $IMAGE_NAME
+  only:
+    - main
+
+deploy:
+  stage: deploy
+  image: kroniak/ssh-client
+  before_script:
+    - echo "deploy ke server"
+  script:
+    - echo $IMAGE_NAME
+    - chmod 400 $SSH_PRIVATE_KEY_PROD
+    - chmod 400 $SSH_PRIVATE_KEY_DEV
+    - ssh -o StrictHostKeyChecking=no -i $SSH_PRIVATE_KEY_PROD it@192.168.150.120 "docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY"
+    - ssh -o StrictHostKeyChecking=no -i $SSH_PRIVATE_KEY_PROD it@192.168.150.120 "docker pull $IMAGE_NAME"
+    - ssh -o StrictHostKeyChecking=no -i $SSH_PRIVATE_KEY_PROD it@192.168.150.120 "docker stop whatsapp || true && docker rm whatsapp || true"
+    - echo $ENV_PROD
+    - scp -o StrictHostKeyChecking=no -i $SSH_PRIVATE_KEY_PROD $ENV_PROD it@192.168.150.120:/home/it/htdocs-web/private/whatsapp-wrapper/.env
+    - ssh -o StrictHostKeyChecking=no -i $SSH_PRIVATE_KEY_PROD it@192.168.150.120 "docker run -d --env-file /home/it/htdocs-web/private/whatsapp-wrapper/.env --name whatsapp -p 9070:80 $IMAGE_NAME"
+    - ssh -o StrictHostKeyChecking=no -i $SSH_PRIVATE_KEY_PROD it@192.168.150.120 "docker image prune -fa"
+
+    - ssh -o StrictHostKeyChecking=no -i $SSH_PRIVATE_KEY_DEV it@192.168.150.200 "docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY"
+    - ssh -o StrictHostKeyChecking=no -i $SSH_PRIVATE_KEY_DEV it@192.168.150.200 "docker pull $IMAGE_NAME"
+    - ssh -o StrictHostKeyChecking=no -i $SSH_PRIVATE_KEY_DEV it@192.168.150.200 "docker stop whatsapp || true && docker rm whatsapp || true"
+    - echo $ENV_DEV
+    - scp -o StrictHostKeyChecking=no -i $SSH_PRIVATE_KEY_DEV $ENV_DEV it@192.168.150.200:/home/it/docker-file/node_project/.env
+    - ssh -o StrictHostKeyChecking=no -i $SSH_PRIVATE_KEY_DEV it@192.168.150.200 "docker run -d --env-file /home/it/docker-file/node_project/.env --name whatsapp -p 9070:80 $IMAGE_NAME"
+    - ssh -o StrictHostKeyChecking=no -i $SSH_PRIVATE_KEY_DEV it@192.168.150.200 "docker image prune -fa"
+
+  only: 
+    - main
